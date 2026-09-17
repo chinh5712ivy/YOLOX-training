@@ -291,13 +291,16 @@ class COCOEvaluator:
                 json.dump(data_dict, open(tmp, "w"))
                 cocoDt = cocoGt.loadRes(tmp)
             try:
+                import sys
+                if sys.platform == "win32":
+                    raise RuntimeError("Windows uses standard pycocotools directly")
                 from yolox.layers import COCOeval_opt as COCOeval
-            except ImportError:
+                cocoEval = COCOeval(cocoGt, cocoDt, annType[1])
+            except Exception:
                 from pycocotools.cocoeval import COCOeval
 
                 logger.warning("Use standard COCOeval.")
-
-            cocoEval = COCOeval(cocoGt, cocoDt, annType[1])
+                cocoEval = COCOeval(cocoGt, cocoDt, annType[1])
             cocoEval.evaluate()
             cocoEval.accumulate()
             redirect_string = io.StringIO()

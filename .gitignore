@@ -226,3 +226,15 @@ events.out.tfevents*
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Virtualenv in project folder
+yolox/Scripts/
+yolox/pyvenv.cfg
+yolox/share/
+yolox/Include/
+yolox/Lib/
+yolox/lib/
+yolox/bin/
+
+# Gradle
+.gradle/
