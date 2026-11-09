@@ -96,6 +96,9 @@ class Exp(BaseExp):
         # save history checkpoint or not.
         # If set to False, yolox will only save latest and best ckpt.
         self.save_history_ckpt = True
+        # early stopping config (None or 0 to disable)
+        self.early_stopping_patience = None
+        self.early_stopping_min_delta = 0.0
         # name of experiment
         self.exp_name = os.path.split(os.path.realpath(__file__))[1].split(".")[0]
 

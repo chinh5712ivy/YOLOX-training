@@ -7,6 +7,7 @@ import time
 from loguru import logger
 
 import torch
+import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
@@ -56,6 +57,12 @@ class Trainer:
         self.data_type = torch.float16 if args.fp16 else torch.float32
         self.input_size = exp.input_size
         self.best_ap = 0
+        self.no_improvement_epochs = 0
+        self.stop_training = False
+        if getattr(args, "early_stopping_patience", None) is not None:
+            self.exp.early_stopping_patience = args.early_stopping_patience
+        if getattr(args, "early_stopping_min_delta", None) is not None:
+            self.exp.early_stopping_min_delta = args.early_stopping_min_delta
 
         # metric record
         self.meter = MeterBuffer(window_size=exp.print_interval)
@@ -86,6 +93,9 @@ class Trainer:
             self.before_epoch()
             self.train_in_iter()
             self.after_epoch()
+            if getattr(self, "stop_training", False):
+                logger.info(f"Early stopping active. Exiting training loop at epoch {self.epoch + 1}.")
+                break
 
     def train_in_iter(self):
         for self.iter in range(self.max_iter):
@@ -321,6 +331,7 @@ class Trainer:
             model.load_state_dict(ckpt["model"])
             self.optimizer.load_state_dict(ckpt["optimizer"])
             self.best_ap = ckpt.pop("best_ap", 0)
+            self.no_improvement_epochs = ckpt.pop("no_improvement_epochs", 0)
             # resume the training states variables
             start_epoch = (
                 self.args.start_epoch - 1
@@ -356,10 +367,28 @@ class Trainer:
                 evalmodel, self.evaluator, self.is_distributed, return_outputs=True
             )
 
-        update_best_ckpt = ap50_95 > self.best_ap
-        self.best_ap = max(self.best_ap, ap50_95)
+        patience = getattr(self.exp, "early_stopping_patience", None)
+        min_delta = getattr(self.exp, "early_stopping_min_delta", 0.0)
+
+        if ap50_95 > (self.best_ap + min_delta):
+            update_best_ckpt = True
+            self.best_ap = ap50_95
+            self.no_improvement_epochs = 0
+        else:
+            update_best_ckpt = False
+            self.no_improvement_epochs += 1
 
         if self.rank == 0:
+            if patience is not None and patience > 0:
+                logger.info(
+                    f"EarlyStopping: {self.no_improvement_epochs}/{patience} epochs without improvement >= {min_delta:.4f} (Best AP: {self.best_ap:.4f}, Curr AP: {ap50_95:.4f})"
+                )
+                if self.no_improvement_epochs >= patience:
+                    self.stop_training = True
+                    logger.info(
+                        f"Early stopping triggered! Training stopped because mAP did not improve for {patience} consecutive epochs. Best AP: {self.best_ap:.4f}"
+                    )
+
             if self.args.logger == "tensorboard":
                 self.tblogger.add_scalar("val/COCOAP50", ap50, self.epoch + 1)
                 self.tblogger.add_scalar("val/COCOAP50_95", ap50_95, self.epoch + 1)
@@ -380,6 +409,11 @@ class Trainer:
                 self.mlflow_logger.on_log(self.args, self.exp, self.epoch+1, logs)
             logger.info("\n" + summary)
         synchronize()
+
+        if self.is_distributed:
+            stop_tensor = torch.tensor([1 if self.stop_training else 0], dtype=torch.int, device=self.device)
+            dist.broadcast(stop_tensor, src=0)
+            self.stop_training = bool(stop_tensor.item() == 1)
 
         self.save_ckpt("last_epoch", update_best_ckpt, ap=ap50_95)
         if self.save_history_ckpt:
@@ -406,6 +440,7 @@ class Trainer:
                 "optimizer": self.optimizer.state_dict(),
                 "best_ap": self.best_ap,
                 "curr_ap": ap,
+                "no_improvement_epochs": self.no_improvement_epochs,
             }
             save_checkpoint(
                 ckpt_state,

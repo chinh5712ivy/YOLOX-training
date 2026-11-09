@@ -89,6 +89,18 @@ def make_parser():
         default="tensorboard"
     )
     parser.add_argument(
+        "--early-stopping-patience",
+        default=None,
+        type=int,
+        help="Number of epochs without mAP improvement before early stopping (overrides exp)",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        default=None,
+        type=float,
+        help="Minimum improvement required for early stopping (overrides exp)",
+    )
+    parser.add_argument(
         "opts",
         help="Modify config options using the command-line",
         default=None,
